@@ -10,8 +10,8 @@ spec:
   taskMax: 1
   configs:
     activemq.url: "failover:(tcp://datafeeds.networkrail.co.uk:61619)?randomize=false"
-    activemq.username: daniel.j.crow@gmail.com
-    activemq.password: Sm3g@h3ad
+    activemq.username: <NETWORK_RAIL_USERNAME>
+    activemq.password: <NETWORK_RAIL_PASSWORD>
     jms.destination.type: topic
     jms.destination.name: TRAIN_MVT_ALL_TOC
     kafka.topic: TRAIN_MESSAGES

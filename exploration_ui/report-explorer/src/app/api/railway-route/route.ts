@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const GRAPHHOPPER_API_KEY = '993de56b-c837-4a4d-89a1-df9c03971c98';
-const GRAPHHOPPER_URL = 'https://graphhopper.com/api/1/route';
+const GRAPHHOPPER_API_KEY = process.env.GRAPHHOPPER_API_KEY || '';
+const GRAPHHOPPER_URL = process.env.GRAPHHOPPER_URL || 'https://graphhopper.com/api/1/route';
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,6 +26,15 @@ export async function GET(request: NextRequest) {
         { error: 'At least 2 points are required' },
         { status: 400 }
       );
+    }
+
+    // If no GraphHopper API key is provided, use straight-line fallback
+    if (!GRAPHHOPPER_API_KEY) {
+      return NextResponse.json({
+        fallback: true,
+        coordinates: pointsArray.map(([lat, lon]) => [lon, lat]),
+        message: 'GraphHopper API key not configured, using straight line fallback'
+      });
     }
 
     // Build GraphHopper request

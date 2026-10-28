@@ -3,8 +3,13 @@
 
 set -e
 
-USERNAME="${NETWORK_RAIL_USERNAME:-crowdani@uk.ibm.com}"
-PASSWORD="${NETWORK_RAIL_PASSWORD:-Sm3g@h3ad}"
+USERNAME="${NETWORK_RAIL_USERNAME:-}"
+PASSWORD="${NETWORK_RAIL_PASSWORD:-}"
+
+if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+    echo "ERROR: NETWORK_RAIL_USERNAME and NETWORK_RAIL_PASSWORD environment variables must be set."
+    exit 1
+fi
 
 echo "STEP:1:STARTED"
 echo "=========================================="
