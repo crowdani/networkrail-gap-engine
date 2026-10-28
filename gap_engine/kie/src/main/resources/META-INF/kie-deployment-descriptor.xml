@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  KIE Deployment Descriptor for BAMOE 8 / Business Central / KIE Server
+  Configures runtime strategy, work item handlers, and user/group resolution.
+-->
+<deployment-descriptor xsi:schemaLocation="http://www.jboss.org/jbpm deployment-descriptor.xsd"
+                       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+  <!-- One process instance per container (default for human-task workflows) -->
+  <runtime-strategy>PER_PROCESS_INSTANCE</runtime-strategy>
+
+  <!-- Persistence unit defined in KIE Server's persistence.xml -->
+  <persistence-unit>org.jbpm.domain</persistence-unit>
+  <audit-persistence-unit>org.jbpm.domain</audit-persistence-unit>
+
+  <audit-mode>JPA</audit-mode>
+  <persistence-mode>JPA</persistence-mode>
+
+  <!-- Classes exposed to JAXB for REST API responses -->
+  <marshalling-strategies/>
+
+  <!-- Event listeners -->
+  <event-listeners/>
+  <task-event-listeners/>
+  <globals/>
+  <work-item-handlers>
+    <!-- Built-in REST work item handler — used by the Fetch Stops service task -->
+    <work-item-handler>
+      <resolver>mvel</resolver>
+      <identifier>Rest</identifier>
+      <parameters>
+        <parameter>
+          <resolver>mvel</resolver>
+          <identifier>new org.jbpm.process.workitem.rest.RESTWorkItemHandler(classLoader)</identifier>
+          <parameters/>
+        </parameter>
+      </parameters>
+      <name>Rest</name>
+    </work-item-handler>
+  </work-item-handlers>
+
+  <!-- Group that gets the Review Journey Gaps user tasks -->
+  <roles>
+    <role>gap-approvers</role>
+    <role>kie-server</role>
+  </roles>
+
+  <!-- Required capabilities -->
+  <remoteable-classes/>
+  <required-roles/>
+
+  <!-- Keep process instances in the task inbox after completion for audit -->
+  <limit-serialization-classes>true</limit-serialization-classes>
+</deployment-descriptor>

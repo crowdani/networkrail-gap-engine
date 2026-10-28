@@ -1,0 +1,132 @@
+---
+# KafkaNodePool is required by Strimzi 0.39+ / AMQ Streams 2.7+
+# It replaces the inline broker/controller spec in the Kafka CR
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: broker
+  namespace: networkrail-gap-engine
+  labels:
+    strimzi.io/cluster: broker
+spec:
+  replicas: 1
+  roles:
+    - broker
+    - controller          # combined broker+controller (KRaft mode, no ZooKeeper)
+  storage:
+    type: ephemeral       # switch to "persistent-claim" if you want durable storage
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: broker
+  namespace: networkrail-gap-engine
+  annotations:
+    # Tells the operator this cluster uses KafkaNodePools
+    strimzi.io/node-pools: enabled
+    # Use KRaft (no ZooKeeper)
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: 4.2.0
+    metadataVersion: 4.2-IV1
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      default.replication.factor: 1
+      min.insync.replicas: 1
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+
+---
+# Create the topics your services subscribe to
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: train-movements
+  namespace: networkrail-gap-engine
+  labels:
+    strimzi.io/cluster: broker
+spec:
+  partitions: 3
+  replicas: 1
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: train-activations
+  namespace: networkrail-gap-engine
+  labels:
+    strimzi.io/cluster: broker
+spec:
+  partitions: 3
+  replicas: 1
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: journey-updates
+  namespace: networkrail-gap-engine
+  labels:
+    strimzi.io/cluster: broker
+spec:
+  partitions: 3
+  replicas: 1
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: train-movements-py
+  namespace: networkrail-gap-engine
+  labels:
+    strimzi.io/cluster: broker
+spec:
+  partitions: 1
+  replicas: 1
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: train-activations-py
+  namespace: networkrail-gap-engine
+  labels:
+    strimzi.io/cluster: broker
+spec:
+  partitions: 1
+  replicas: 1
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: train-cancellations-py
+  namespace: networkrail-gap-engine
+  labels:
+    strimzi.io/cluster: broker
+spec:
+  partitions: 1
+  replicas: 1
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: train-reinstatements-py
+  namespace: networkrail-gap-engine
+  labels:
+    strimzi.io/cluster: broker
+spec:
+  partitions: 1
+  replicas: 1

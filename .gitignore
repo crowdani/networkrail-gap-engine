@@ -1,0 +1,77 @@
+.DS_Store
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment files
+.env
+.env.local
+
+# Runtime files (PIDs and logs)
+.run/
+*.pid
+*.log
+
+# Database
+*.db
+*.db-journal
+
+# Logs
+*.jsonl
+messages.jsonl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+docker-compose.override.yml
+
+# Certificates
+*.pem
+*.crt
+*.key
+
+# Temporary files
+*.tmp
+*.bak
+ARCHITECTURE.md
+toc-full
+deployment-credentials.env
+
+# Graphite offline cache and build artifacts
+offline-mirror/
+.offline-cache-timestamp
+.offline-cache-metadata.json
+.bob/
+**/node_modules/
+**/build/
+# Graphite vendorized dependencies and configuration
+vendors/
+.yarnrc
+configure.cjs
+libraries.json
+setup.cjs

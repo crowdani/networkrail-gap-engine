@@ -1,0 +1,127 @@
+---
+# =============================================================================
+# frontend  — Next.js Report Explorer UI
+# Standalone build served by node server.js on port 3000.
+# Exposes a TLS-terminated Route at:
+#   https://frontend-networkrail-gap-engine.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: networkrail-gap-engine
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: frontend
+          image: image-registry.openshift-image-registry.svc:5000/networkrail-gap-engine/frontend:latest
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          env:
+            # Next.js / NextAuth
+            - name: NODE_ENV
+              value: "production"
+            - name: NEXTAUTH_URL
+              value: "https://frontend-networkrail-gap-engine.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com"
+            - name: AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nextjs-auth
+                  key: auth-secret
+            # PostgreSQL — frontend reads directly for report pages
+            - name: POSTGRES_HOST
+              value: "postgresql.networkrail-gap-engine.svc"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-name
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-password
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: networkrail-gap-engine
+  labels:
+    app: frontend
+spec:
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: frontend
+  namespace: networkrail-gap-engine
+  labels:
+    app: frontend
+spec:
+  host: frontend-networkrail-gap-engine.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+  to:
+    kind: Service
+    name: frontend
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

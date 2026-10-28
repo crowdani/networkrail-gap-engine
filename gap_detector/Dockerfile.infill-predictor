@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Only kafka-python needed — all enrichment is payload-based, no database
+RUN pip install --no-cache-dir \
+    kafka-python==2.0.2
+
+# Copy both the service entry point and the predictor library it imports
+COPY infill_time_predictor_service.py .
+COPY infill_predictor.py .
+
+CMD ["python3", "-u", "infill_time_predictor_service.py"]

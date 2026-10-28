@@ -1,0 +1,8 @@
+# Gap Detector — Confluent pipeline services
+# Used by: completed_journey_gap_detector.py, infill_time_predictor_service.py, infill_predictor.py
+kafka-python==2.0.2
+psycopg2-binary>=2.9
+
+# Delay Cause Analyser — watsonx.ai LLM integration
+# Used by: delay_cause_analyser.py
+ibm-watsonx-ai>=1.0.0

@@ -1,0 +1,71 @@
+---
+# KsqlDB CFK CR — revised patch using CFK-native schema fields.
+#
+# What this does:
+#
+#   1. mountedVolumes
+#      Mounts the `ksqldb-jdbc-driver-init` ConfigMap at /mnt/jdbc-scripts
+#      inside the ksqlDB container. The ConfigMap holds the copy script for
+#      reference / manual use, and acts as the declaration of intent alongside
+#      the dependencies.connect wiring below.
+#
+#   2. dependencies.connect
+#      Wires ksqlDB to the existing Confluent Connect cluster
+#      (http://connect.confluent.svc.cluster.local:8083).
+#      This is the CFK-native way to give ksqlDB access to JDBC connectors:
+#      ksqlDB delegates `CREATE SOURCE/SINK CONNECTOR` statements to Connect,
+#      which already has kafka-connect-jdbc 10.8.0 (with postgresql-42.4.4.jar)
+#      installed via the onDemand build. No JAR copying is needed on the ksqlDB
+#      pod itself — the JDBC driver runs inside Connect, not ksqlDB.
+#
+# After applying, you can run in ksqlDB:
+#
+#   CREATE SOURCE CONNECTOR `postgres-journey-plan` WITH (
+#     'connector.class'    = 'io.confluent.connect.jdbc.JdbcSourceConnector',
+#     'connection.url'     = 'jdbc:postgresql://postgresql.confluent.svc.cluster.local:5432/network_rail',
+#     'connection.user'    = 'postgres',
+#     'connection.password'= 'postgres',
+#     'table.whitelist'    = 'journey_plan',
+#     'mode'               = 'bulk',
+#     'topic.prefix'       = 'nr.',
+#     'poll.interval.ms'   = '60000',
+#     'numeric.mapping'    = 'best_fit',
+#     'key.converter'      = 'org.apache.kafka.connect.storage.StringConverter',
+#     'value.converter'    = 'org.apache.kafka.connect.json.JsonConverter',
+#     'value.converter.schemas.enable' = 'false'
+#   );
+#
+# Apply with:
+#   kubectl apply -f k8s/ksqldb-jdbc-patch.yaml
+apiVersion: platform.confluent.io/v1beta1
+kind: KsqlDB
+metadata:
+  name: ksqldb
+  namespace: confluent
+spec:
+  dataVolumeCapacity: 10Gi
+  image:
+    application: confluentinc/cp-ksqldb-server:8.1.0
+    init: confluentinc/confluent-init-container:3.1.0
+  replicas: 1
+
+  # ── Connect cluster wiring ─────────────────────────────────────────────────
+  # Allows ksqlDB to proxy CREATE/DROP/DESCRIBE CONNECTOR statements to
+  # the Connect REST API, which holds the JDBC driver.
+  dependencies:
+    connect:
+      url: http://connect.confluent.svc.cluster.local:8083
+
+  # ── Mount the init ConfigMap for reference ─────────────────────────────────
+  # Provides /mnt/jdbc-scripts/copy-jdbc-driver.sh inside the pod in case
+  # a manual copy-to-extension-dir operation is ever needed.
+  mountedVolumes:
+    volumes:
+      - name: jdbc-init-scripts
+        configMap:
+          name: ksqldb-jdbc-driver-init
+          defaultMode: 0755
+    volumeMounts:
+      - name: jdbc-init-scripts
+        mountPath: /mnt/jdbc-scripts
+        readOnly: true

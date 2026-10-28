@@ -1,0 +1,41 @@
+---
+# ConfigMap: shell script run by the ksqlDB initContainer to copy the
+# PostgreSQL JDBC driver from the Confluent Connect image into a shared
+# emptyDir volume that the ksqlDB server process can read at startup.
+#
+# Why this approach?
+#   - The Confluent for Kubernetes (CFK) ksqlDB CR does not support the
+#     `build.onDemand` plugin mechanism that the Connect CR does.
+#   - The JDBC driver JAR is already shipped inside the official
+#     `confluentinc/cp-server-connect` image (under
+#     /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/).
+#   - An initContainer using that image copies the JARs into an emptyDir
+#     (/opt/ksqldb-ext) before the main ksqlDB container starts.
+#   - `ksql.extension.dir` in ksqldb-shared-config is then set to that path
+#     so ksqlDB loads the driver on boot.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ksqldb-jdbc-driver-init
+  namespace: confluent
+  labels:
+    app: ksqldb
+    purpose: jdbc-driver
+data:
+  copy-jdbc-driver.sh: |
+    #!/bin/sh
+    set -ex
+
+    SRC_DIR="/usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib"
+    DEST_DIR="/opt/ksqldb-ext"
+
+    mkdir -p "${DEST_DIR}"
+
+    # Copy only the PostgreSQL JDBC driver and the Kafka Connect JDBC connector
+    # JAR — these are all ksqlDB needs to talk to PostgreSQL via JDBC queries.
+    cp "${SRC_DIR}/postgresql-42.4.4.jar"       "${DEST_DIR}/"
+    cp "${SRC_DIR}/kafka-connect-jdbc-10.8.0.jar" "${DEST_DIR}/"
+    cp "${SRC_DIR}/slf4j-api-1.7.36.jar"          "${DEST_DIR}/"
+
+    echo "JDBC JARs copied to ${DEST_DIR}:"
+    ls -lh "${DEST_DIR}/"

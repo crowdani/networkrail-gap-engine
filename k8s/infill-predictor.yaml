@@ -1,0 +1,92 @@
+# =============================================================================
+# Infill Time Predictor — Kubernetes / OpenShift manifests
+#
+# Resources:
+#   ImageStream           infill-predictor
+#   Deployment            infill-predictor
+#
+# Pipeline position:
+#   NR_JOURNEY_GAPS  →  [this service]  →  NR_JOURNEY_GAPS_PREDICTED
+#
+# The service reads every record from NR_JOURNEY_GAPS, applies the
+# InfillPredictor to each missed stop (4 strategies, payload-only, no DB),
+# and republishes the enriched record to NR_JOURNEY_GAPS_PREDICTED.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ImageStream — lets the internal registry tag and serve the image
+# -----------------------------------------------------------------------------
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: infill-predictor
+  namespace: networkrail-gap-engine
+  labels:
+    app: infill-predictor
+    component: stream-processor
+spec:
+  lookupPolicy:
+    local: true
+
+---
+
+# -----------------------------------------------------------------------------
+# Deployment
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: infill-predictor
+  namespace: networkrail-gap-engine
+  labels:
+    app: infill-predictor
+    component: stream-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: infill-predictor
+  # Recreate prevents two instances competing on the same consumer group offset
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: infill-predictor
+        component: stream-processor
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: infill-predictor
+          image: image-registry.openshift-image-registry.svc:5000/networkrail-gap-engine/infill-predictor:latest
+          imagePullPolicy: Always
+          command: ["python3", "-u", "infill_time_predictor_service.py"]
+          env:
+            # ----------------------------------------------------------------
+            # Kafka — reads NR_JOURNEY_GAPS, writes NR_JOURNEY_GAPS_PREDICTED
+            # ----------------------------------------------------------------
+            - name: KAFKA_BROKER
+              value: "kafka.confluent.svc.cluster.local:9092"
+            - name: INPUT_TOPIC
+              value: "NR_JOURNEY_GAPS"
+            - name: OUTPUT_TOPIC
+              value: "NR_JOURNEY_GAPS_PREDICTED"
+            - name: CONSUMER_GROUP
+              value: "infill-predictor-v3"
+            - name: AUTO_OFFSET_RESET
+              value: "earliest"
+          resources:
+            requests:
+              memory: 96Mi
+              cpu: 50m
+            limits:
+              memory: 192Mi
+              cpu: 200m
+          # Liveness: the process exits on fatal error, so a simple process
+          # check is sufficient — restart policy handles recovery.
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "infill_time_predictor_service.py"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3

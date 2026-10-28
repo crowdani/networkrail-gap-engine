@@ -1,0 +1,418 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: schedule-refresh-script
+  namespace: networkrail-gap-engine
+data:
+  load_cif_json_fast.py: |
+    #!/usr/bin/env python3
+    """
+    Fast CIF JSON loader with TIPLOC cache and bulk inserts
+    Optimized for loading large 3GB+ files
+    """
+
+    import json
+    import psycopg2
+    from psycopg2.extras import execute_values
+    from datetime import datetime
+    import sys
+    import os
+
+    DB_CONFIG = {
+        'host': os.getenv('POSTGRES_HOST', 'localhost'),
+        'port': int(os.getenv('POSTGRES_PORT', 5432)),
+        'database': os.getenv('POSTGRES_DB', 'network_rail'),
+        'user': os.getenv('POSTGRES_USER', 'postgres'),
+        'password': os.getenv('POSTGRES_PASSWORD', 'postgres')
+    }
+
+    TIPLOC_CACHE = {}
+
+    def connect_db():
+        return psycopg2.connect(**DB_CONFIG)
+
+    def load_tiploc_cache(conn):
+        global TIPLOC_CACHE
+        print("Loading TIPLOC->STANOX cache into memory...")
+        with conn.cursor() as cur:
+            cur.execute("SELECT tiploc, stanox FROM tiploc_reference WHERE tiploc IS NOT NULL")
+            TIPLOC_CACHE = {tiploc: stanox for tiploc, stanox in cur}
+        print(f"Cached {len(TIPLOC_CACHE):,} TIPLOC mappings\n")
+
+    def convert_tiploc_array_to_stanox(tiploc_array):
+        return [TIPLOC_CACHE.get(tiploc) for tiploc in tiploc_array]
+
+    def parse_schedule(schedule_json):
+        try:
+            train_uid = schedule_json.get('CIF_train_uid')
+            stp_indicator = schedule_json.get('CIF_stp_indicator', 'P')
+            start_date_str = schedule_json.get('schedule_start_date')
+            end_date_str = schedule_json.get('schedule_end_date')
+            if not start_date_str or not end_date_str:
+                return None
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            days_runs = schedule_json.get('schedule_days_runs', '0000000')
+            segment = schedule_json.get('schedule_segment', {})
+            atoc_code = schedule_json.get('atoc_code')
+            train_status = schedule_json.get('train_status', 'P')
+            train_category = segment.get('CIF_train_category')
+            signalling_id = segment.get('signalling_id')
+            headcode = segment.get('CIF_headcode')
+            service_code = segment.get('CIF_train_service_code')
+            power_type = segment.get('CIF_power_type')
+            timing_load = segment.get('CIF_timing_load')
+            speed = segment.get('CIF_speed')
+            train_class = segment.get('CIF_train_class')
+            sleepers = segment.get('CIF_sleepers')
+            reservations = segment.get('CIF_reservations')
+            catering_code = segment.get('CIF_catering_code')
+            service_branding = segment.get('CIF_service_branding')
+            locations = segment.get('schedule_location', [])
+            if not locations:
+                return None
+            tiploc_array = []
+            timing_data = []
+            for loc in locations:
+                tiploc = loc.get('tiploc_code')
+                if not tiploc:
+                    continue
+                tiploc_array.append(tiploc)
+                timing_data.append({
+                    'tiploc': tiploc,
+                    'location_type': loc.get('location_type'),
+                    'arrival': loc.get('arrival'),
+                    'departure': loc.get('departure'),
+                    'pass': loc.get('pass'),
+                    'public_arrival': loc.get('public_arrival'),
+                    'public_departure': loc.get('public_departure'),
+                    'platform': loc.get('platform'),
+                    'line': loc.get('line')
+                })
+            if not tiploc_array:
+                return None
+            stanox_array = convert_tiploc_array_to_stanox(tiploc_array)
+            transaction_type = schedule_json.get('transaction_type', 'Create')
+            applicable_timetable = schedule_json.get('applicable_timetable', 'Y')
+            return (
+                train_uid, stp_indicator, start_date, end_date, days_runs,
+                atoc_code, train_status, train_category, signalling_id, headcode,
+                service_code, power_type, timing_load, speed, train_class,
+                sleepers, reservations, catering_code, service_branding,
+                tiploc_array, stanox_array, json.dumps(timing_data),
+                transaction_type, applicable_timetable
+            )
+        except Exception:
+            return None
+
+    def bulk_insert_schedules(conn, schedules):
+        if not schedules:
+            return
+        with conn.cursor() as cur:
+            execute_values(cur, """
+                INSERT INTO active_schedule (
+                    cif_train_uid, cif_stp_indicator, schedule_start_date, schedule_end_date,
+                    schedule_days_runs, atoc_code, train_status, train_category,
+                    signalling_id, headcode, service_code, power_type, timing_load,
+                    speed, train_class, sleepers, reservations, catering_code,
+                    service_branding, tiploc_array, stanox_array, timing_data,
+                    transaction_type, applicable_timetable
+                ) VALUES %s
+                ON CONFLICT (cif_train_uid, schedule_start_date, cif_stp_indicator)
+                DO UPDATE SET
+                    schedule_end_date = EXCLUDED.schedule_end_date,
+                    schedule_days_runs = EXCLUDED.schedule_days_runs,
+                    atoc_code = EXCLUDED.atoc_code,
+                    train_status = EXCLUDED.train_status,
+                    train_category = EXCLUDED.train_category,
+                    signalling_id = EXCLUDED.signalling_id,
+                    headcode = EXCLUDED.headcode,
+                    service_code = EXCLUDED.service_code,
+                    power_type = EXCLUDED.power_type,
+                    timing_load = EXCLUDED.timing_load,
+                    speed = EXCLUDED.speed,
+                    train_class = EXCLUDED.train_class,
+                    sleepers = EXCLUDED.sleepers,
+                    reservations = EXCLUDED.reservations,
+                    catering_code = EXCLUDED.catering_code,
+                    service_branding = EXCLUDED.service_branding,
+                    tiploc_array = EXCLUDED.tiploc_array,
+                    stanox_array = EXCLUDED.stanox_array,
+                    timing_data = EXCLUDED.timing_data,
+                    transaction_type = EXCLUDED.transaction_type,
+                    applicable_timetable = EXCLUDED.applicable_timetable,
+                    updated_at = CURRENT_TIMESTAMP
+            """, schedules)
+
+    def load_cif_json(filename):
+        conn = connect_db()
+        try:
+            print(f"\n{'='*60}")
+            print(f"FAST CIF JSON LOADER")
+            print(f"{'='*60}")
+            print(f"File: {filename}")
+            file_size = os.path.getsize(filename)
+            print(f"Size: {file_size / (1024**3):.2f} GB\n")
+            load_tiploc_cache(conn)
+            print("Processing schedules...\n")
+            schedules_batch = []
+            batch_size = 1000
+            schedules_processed = 0
+            lines_read = 0
+            with open(filename, 'r') as f:
+                for line in f:
+                    lines_read += 1
+                    try:
+                        data = json.loads(line)
+                        if 'JsonScheduleV1' in data:
+                            schedule_tuple = parse_schedule(data['JsonScheduleV1'])
+                            if schedule_tuple:
+                                schedules_batch.append(schedule_tuple)
+                                if len(schedules_batch) >= batch_size:
+                                    bulk_insert_schedules(conn, schedules_batch)
+                                    schedules_processed += len(schedules_batch)
+                                    conn.commit()
+                                    schedules_batch = []
+                                    if schedules_processed % 10000 == 0:
+                                        print(f"Processed {schedules_processed:,} schedules (read {lines_read:,} lines)", flush=True)
+                    except Exception:
+                        continue
+            if schedules_batch:
+                bulk_insert_schedules(conn, schedules_batch)
+                schedules_processed += len(schedules_batch)
+                conn.commit()
+            print(f"\n{'='*60}")
+            print(f"LOADING COMPLETE!")
+            print(f"Lines read:       {lines_read:,}")
+            print(f"Schedules loaded: {schedules_processed:,}")
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM active_schedule")
+                total = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(DISTINCT cif_train_uid) FROM active_schedule")
+                unique = cur.fetchone()[0]
+                print(f"Total in DB:      {total:,}")
+                print(f"Unique train UIDs:{unique:,}")
+            print(f"{'='*60}\n")
+        except Exception as e:
+            conn.rollback()
+            print(f"\nERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+        finally:
+            conn.close()
+
+    if __name__ == '__main__':
+        if len(sys.argv) < 2:
+            print("Usage: python3 load_cif_json_fast.py <filename>")
+            sys.exit(1)
+        filename = sys.argv[1]
+        if not os.path.exists(filename):
+            print(f"ERROR: File not found: {filename}")
+            sys.exit(1)
+        load_cif_json(filename)
+
+  run_refresh.py: |
+    #!/usr/bin/env python3
+    """
+    Single-file schedule refresh runner.
+    Downloads the CIF file using requests (handles auth-through-redirects
+    correctly), decompresses with gzip stdlib, then calls the loader.
+    """
+    import os, sys, gzip, shutil, importlib.util, subprocess
+
+    USERNAME = os.environ['USERNAME']
+    PASSWORD = os.environ['PASSWORD']
+    WORK_DIR = '/work'
+    URL = 'https://publicdatafeeds.networkrail.co.uk/ntrod/CifFileAuthenticate?type=CIF_ALL_FULL_DAILY&day=toc-full'
+
+    # ---- STEP 1: install deps into /work/.pip (writable emptyDir) ----
+    print("STEP:1:STARTED")
+    print("Installing Python dependencies...")
+    subprocess.check_call([
+        sys.executable, '-m', 'pip', 'install',
+        '--quiet', '--no-cache-dir',
+        '--target', f'{WORK_DIR}/.pip',
+        'psycopg2-binary', 'requests'
+    ])
+    sys.path.insert(0, f'{WORK_DIR}/.pip')
+    print("STEP:1:COMPLETE:Dependencies installed")
+
+    # ---- STEP 2: download ----
+    # requests natively re-sends auth on each redirect hop via auth= parameter.
+    print("\nSTEP:2:STARTED")
+    print("Downloading CIF schedule from Network Rail...")
+    import requests
+    gz_path = f'{WORK_DIR}/toc-full.gz'
+    with requests.get(URL, auth=(USERNAME, PASSWORD), stream=True, timeout=300) as r:
+        r.raise_for_status()
+        with open(gz_path, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                f.write(chunk)
+    size_mb = os.path.getsize(gz_path) / (1024 * 1024)
+    print(f"STEP:2:COMPLETE:Downloaded {size_mb:.1f} MB")
+
+    # ---- STEP 3: decompress ----
+    print("\nSTEP:3:STARTED")
+    out_path = f'{WORK_DIR}/toc-full'
+    with gzip.open(gz_path, 'rb') as gz_in, open(out_path, 'wb') as f_out:
+        shutil.copyfileobj(gz_in, f_out)
+    size_gb = os.path.getsize(out_path) / (1024 ** 3)
+    print(f"STEP:3:COMPLETE:Decompressed to {size_gb:.2f} GB")
+
+    # ---- STEP 4: load into database ----
+    print("\nSTEP:4:STARTED")
+    print("Loading schedules into database (this takes several minutes)...")
+    spec = importlib.util.spec_from_file_location('loader', '/scripts/load_cif_json_fast.py')
+    loader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loader)
+    loader.load_cif_json(out_path)
+    print("STEP:4:COMPLETE")
+    print("\n==========================================")
+    print("COMPLETE: Schedule refresh finished successfully")
+    print("==========================================")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: schedule-refresh
+  namespace: networkrail-gap-engine
+spec:
+  ttlSecondsAfterFinished: 86400 # Keep job for 24 hours after completion
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: schedule-refresh
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: schedule-loader
+          image: python:3.11-slim
+          command: ["python3", "/scripts/run_refresh.py"]
+          env:
+            - name: USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: networkrail-credentials
+                  key: username
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: networkrail-credentials
+                  key: password
+            - name: POSTGRES_HOST
+              value: "postgresql.networkrail-gap-engine.svc"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-name
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-password
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: work-dir
+              mountPath: /work
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+      volumes:
+        - name: scripts
+          configMap:
+            name: schedule-refresh-script
+            defaultMode: 0755
+        - name: work-dir
+          emptyDir:
+            sizeLimit: 10Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: schedule-refresh-daily
+  namespace: networkrail-gap-engine
+spec:
+  schedule: "0 2 * * *" # Run at 2 AM daily
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: schedule-refresh
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: schedule-loader
+              image: python:3.11-slim
+              command: ["python3", "/scripts/run_refresh.py"]
+              env:
+                - name: USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: networkrail-credentials
+                      key: username
+                - name: PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: networkrail-credentials
+                      key: password
+                - name: POSTGRES_HOST
+                  value: "postgresql.networkrail-gap-engine.svc"
+                - name: POSTGRES_PORT
+                  value: "5432"
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgresql
+                      key: database-name
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgresql
+                      key: database-user
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgresql
+                      key: database-password
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: work-dir
+                  mountPath: /work
+              resources:
+                requests:
+                  memory: "2Gi"
+                  cpu: "1000m"
+                limits:
+                  memory: "4Gi"
+                  cpu: "2000m"
+          volumes:
+            - name: scripts
+              configMap:
+                name: schedule-refresh-script
+                defaultMode: 0755
+            - name: work-dir
+              emptyDir:
+                sizeLimit: 10Gi

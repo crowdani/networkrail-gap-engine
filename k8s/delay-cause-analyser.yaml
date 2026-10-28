@@ -1,0 +1,116 @@
+# =============================================================================
+# Delay Cause Analyser — Kubernetes / OpenShift manifests
+#
+# Resources:
+#   Secret             watsonx-credentials   (create separately — see below)
+#   ImageStream        delay-cause-analyser
+#   Deployment         delay-cause-analyser
+#
+# Pipeline position:
+#   NR_JOURNEY_GAPS_PREDICTED  →  [this service]  →  NR_JOURNEY_GAPS_ANALYSED
+#
+# The service reads each enriched gap record, builds a prompt from the journey
+# stop data, calls the watsonx.ai LLM, and republishes with a delay_analysis
+# field (approval_status starts as "PENDING").
+#
+# Pre-requisite — create the secret once:
+#   oc create secret generic watsonx-credentials \
+#     --from-literal=api-key=<IBM_CLOUD_API_KEY> \
+#     --from-literal=project-id=<WATSONX_PROJECT_ID> \
+#     -n networkrail-gap-engine
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ImageStream
+# -----------------------------------------------------------------------------
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: delay-cause-analyser
+  namespace: networkrail-gap-engine
+  labels:
+    app: delay-cause-analyser
+    component: stream-processor
+spec:
+  lookupPolicy:
+    local: true
+
+---
+
+# -----------------------------------------------------------------------------
+# Deployment
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: delay-cause-analyser
+  namespace: networkrail-gap-engine
+  labels:
+    app: delay-cause-analyser
+    component: stream-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: delay-cause-analyser
+  # Recreate prevents two instances competing on the same consumer group offset
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: delay-cause-analyser
+        component: stream-processor
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: delay-cause-analyser
+          image: image-registry.openshift-image-registry.svc:5000/networkrail-gap-engine/delay-cause-analyser:latest
+          imagePullPolicy: Always
+          command: ["python3", "-u", "delay_cause_analyser.py"]
+          env:
+            # ----------------------------------------------------------------
+            # Kafka
+            # ----------------------------------------------------------------
+            - name: KAFKA_BROKER
+              value: "kafka.confluent.svc.cluster.local:9092"
+            - name: INPUT_TOPIC
+              value: "NR_JOURNEY_GAPS_PREDICTED"
+            - name: OUTPUT_TOPIC
+              value: "NR_JOURNEY_GAPS_ANALYSED"
+            - name: CONSUMER_GROUP
+              value: "delay-cause-analyser-v1"
+            - name: AUTO_OFFSET_RESET
+              value: "earliest"
+            # ----------------------------------------------------------------
+            # watsonx credentials — injected from secret
+            # ----------------------------------------------------------------
+            - name: WATSONX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: watsonx-credentials
+                  key: api-key
+            - name: WATSONX_PROJECT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: watsonx-credentials
+                  key: project-id
+            - name: WATSONX_URL
+              value: "https://eu-de.ml.cloud.ibm.com"
+            - name: WATSONX_MODEL_ID
+              value: "meta-llama/llama-3-3-70b-instruct"
+            - name: WATSONX_MAX_TOKENS
+              value: "300"
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+              cpu: 300m
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "delay_cause_analyser.py"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 3

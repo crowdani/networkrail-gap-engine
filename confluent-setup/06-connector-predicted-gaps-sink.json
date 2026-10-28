@@ -1,0 +1,40 @@
+{
+  "name": "predicted-gaps-postgresql-sink",
+  "config": {
+    "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+    "tasks.max": "1",
+
+    "topics": "PREDICTED_GAPS_FLAT",
+
+    "connection.url": "jdbc:postgresql://postgresql.networkrail-gap-engine.svc:5432/network_rail?stringtype=unspecified",
+    "connection.user": "postgres",
+    "connection.password": "postgres",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+
+    "value.converter": "io.confluent.connect.json.JsonSchemaConverter",
+    "value.converter.schema.registry.url": "http://schemaregistry.confluent.svc:8081",
+
+    "insert.mode": "upsert",
+    "pk.mode": "record_value",
+    "pk.fields": "train_id,station_index,schedule_start_date",
+
+    "table.name.format": "predicted_gaps",
+    "auto.create": "false",
+    "auto.evolve": "false",
+    "quote.sql.identifiers": "never",
+
+    "fields.whitelist": "train_id,train_uid,schedule_start_date,completion_time,total_scheduled_stops,found_stops_count,missed_stops_count,severity,station_index,station_name,tiploc,stanox,scheduled_time,scheduled_arrival,scheduled_departure,actual_time,actual_arrival,actual_departure,predicted_arrival,predicted_arrival_ms,predicted_departure,predicted_departure_ms,predicted_time,predicted_time_ms,predicted_delay_minutes,prediction_confidence,prediction_method,prediction_basis",
+
+    "transforms": "lowerFields",
+    "transforms.lowerFields.type": "org.apache.kafka.connect.transforms.ReplaceField$Value",
+    "transforms.lowerFields.renames": "TRAIN_ID_VAL:train_id,TRAIN_UID:train_uid,SCHEDULE_START_DATE:schedule_start_date,COMPLETION_TIME:completion_time,TOTAL_SCHEDULED_STOPS:total_scheduled_stops,FOUND_STOPS_COUNT:found_stops_count,MISSED_STOPS_COUNT:missed_stops_count,SEVERITY:severity,STATION_INDEX:station_index,STATION_NAME:station_name,TIPLOC:tiploc,STANOX:stanox,SCHEDULED_TIME:scheduled_time,SCHEDULED_ARRIVAL:scheduled_arrival,SCHEDULED_DEPARTURE:scheduled_departure,ACTUAL_TIME:actual_time,ACTUAL_ARRIVAL:actual_arrival,ACTUAL_DEPARTURE:actual_departure,PREDICTED_ARRIVAL:predicted_arrival,PREDICTED_ARRIVAL_MS:predicted_arrival_ms,PREDICTED_DEPARTURE:predicted_departure,PREDICTED_DEPARTURE_MS:predicted_departure_ms,PREDICTED_TIME:predicted_time,PREDICTED_TIME_MS:predicted_time_ms,PREDICTED_DELAY_MINUTES:predicted_delay_minutes,PREDICTION_CONFIDENCE:prediction_confidence,PREDICTION_METHOD:prediction_method,PREDICTION_BASIS:prediction_basis",
+
+    "errors.tolerance": "all",
+    "errors.deadletterqueue.topic.name": "PREDICTED_GAPS_FLAT_DLQ",
+    "errors.deadletterqueue.topic.replication.factor": "3",
+    "errors.deadletterqueue.context.headers.enable": "true",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
+  }
+}

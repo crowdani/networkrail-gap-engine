@@ -1,0 +1,5 @@
+nr.db
+toc-full.jsonl
+__pycache__
+.terraform
+.env

@@ -1,0 +1,182 @@
+---
+# One-shot Job: downloads CORPUSExtract.json from Network Rail and loads
+# it into tiploc_reference. Must run before schedule loading so that
+# stanox_array is populated correctly during CIF schedule import.
+#
+# Usage:
+#   oc delete job corpus-load --ignore-not-found -n networkrail-gap-engine
+#   oc apply -f k8s/corpus-load-job.yaml
+#   oc logs -f job/corpus-load -n networkrail-gap-engine
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: corpus-load
+  namespace: networkrail-gap-engine
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: corpus-load
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: corpus-loader
+          image: python:3.11-slim
+          command: ["python3", "-c"]
+          args:
+            - |
+              import os, sys, json, gzip, subprocess, importlib.util
+
+              USERNAME = os.environ['USERNAME']
+              PASSWORD = os.environ['PASSWORD']
+              WORK_DIR = '/work'
+
+              # ---- install deps ----
+              print("Installing dependencies...")
+              subprocess.check_call([
+                  sys.executable, '-m', 'pip', 'install',
+                  '--quiet', '--no-cache-dir',
+                  '--target', f'{WORK_DIR}/.pip',
+                  'psycopg2-binary', 'requests'
+              ])
+              sys.path.insert(0, f'{WORK_DIR}/.pip')
+              import requests, psycopg2
+              from psycopg2.extras import execute_batch
+              print("Dependencies installed.")
+
+              # ---- download CORPUS ----
+              # The endpoint returns a gzip-compressed JSON file regardless of
+              # Accept-Encoding. Download the raw bytes then decompress with gzip.
+              CORPUS_URL = 'https://publicdatafeeds.networkrail.co.uk/ntrod/SupportingFileAuthenticate?type=CORPUS'
+              gz_path    = f'{WORK_DIR}/CORPUSExtract.json.gz'
+              corpus_path = f'{WORK_DIR}/CORPUSExtract.json'
+              print(f"\nDownloading CORPUS from Network Rail...")
+              with requests.get(CORPUS_URL, auth=(USERNAME, PASSWORD),
+                                stream=True, timeout=120,
+                                headers={'Accept-Encoding': 'identity'}) as r:
+                  r.raise_for_status()
+                  with open(gz_path, 'wb') as f:
+                      for chunk in r.iter_content(chunk_size=512 * 1024):
+                          f.write(chunk)
+              size_mb = os.path.getsize(gz_path) / (1024 * 1024)
+              print(f"Downloaded {size_mb:.1f} MB (compressed)")
+
+              # Decompress — works whether the server returned raw gzip or plain JSON
+              print("Decompressing...")
+              try:
+                  with gzip.open(gz_path, 'rb') as gz_in, open(corpus_path, 'wb') as f_out:
+                      while True:
+                          chunk = gz_in.read(512 * 1024)
+                          if not chunk:
+                              break
+                          f_out.write(chunk)
+                  print(f"Decompressed to {os.path.getsize(corpus_path)/(1024*1024):.1f} MB")
+              except gzip.BadGzipFile:
+                  # Already plain JSON (server sent uncompressed)
+                  import shutil
+                  shutil.copy(gz_path, corpus_path)
+                  print("File was already uncompressed JSON")
+
+              # ---- load into DB ----
+              db = dict(
+                  host=os.environ.get('POSTGRES_HOST', 'postgresql'),
+                  port=int(os.environ.get('POSTGRES_PORT', 5432)),
+                  database=os.environ.get('POSTGRES_DB', 'network_rail'),
+                  user=os.environ.get('POSTGRES_USER', 'postgres'),
+                  password=os.environ.get('POSTGRES_PASSWORD', 'postgres'),
+              )
+              print(f"\nConnecting to {db['host']}:{db['port']}/{db['database']}...")
+              conn = psycopg2.connect(**db)
+              cur = conn.cursor()
+
+              with open(corpus_path) as f:
+                  data = json.load(f)
+              tiploc_data = data.get('TIPLOCDATA', [])
+              print(f"Parsing {len(tiploc_data):,} TIPLOC records...")
+
+              records = []
+              def clean(v, max_len=None):
+                  s = str(v).strip() if v is not None else ''
+                  if not s or s == ' ':
+                      return None
+                  return s[:max_len] if max_len else s
+
+              for rec in tiploc_data:
+                  records.append((
+                      clean(rec.get('NLC'),      6),
+                      clean(rec.get('STANOX'),   7),
+                      clean(rec.get('TIPLOC'),   7),
+                      clean(rec.get('3ALPHA'),   3),
+                      clean(rec.get('UIC'),      7),
+                      (rec.get('NLCDESC') or '').strip()[:255],
+                      clean(rec.get('NLCDESC16'), 16),
+                  ))
+
+              print("Truncating existing tiploc_reference...")
+              cur.execute("TRUNCATE TABLE tiploc_reference")
+
+              print(f"Inserting {len(records):,} records...")
+              execute_batch(cur, """
+                  INSERT INTO tiploc_reference
+                      (nlc, stanox, tiploc, three_alpha, uic, nlc_desc, nlc_desc_16)
+                  VALUES (%s, %s, %s, %s, %s, %s, %s)
+                  ON CONFLICT (nlc) DO NOTHING
+              """, records, page_size=1000)
+              conn.commit()
+
+              cur.execute("SELECT COUNT(*) FROM tiploc_reference")
+              total = cur.fetchone()[0]
+              cur.execute("SELECT COUNT(*) FROM tiploc_reference WHERE stanox IS NOT NULL")
+              with_stanox = cur.fetchone()[0]
+              print(f"\nLoaded {total:,} records ({with_stanox:,} with STANOX)")
+
+              cur.close()
+              conn.close()
+              print("\nCORPUS load complete!")
+
+          env:
+            - name: USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: networkrail-credentials
+                  key: username
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: networkrail-credentials
+                  key: password
+            - name: POSTGRES_HOST
+              value: "postgresql.networkrail-gap-engine.svc"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-name
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-password
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          volumeMounts:
+            - name: work-dir
+              mountPath: /work
+      volumes:
+        - name: work-dir
+          emptyDir:
+            sizeLimit: 1Gi

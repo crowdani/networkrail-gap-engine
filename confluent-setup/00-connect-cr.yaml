@@ -1,0 +1,49 @@
+# =============================================================================
+# 00-connect-cr.yaml — Confluent Platform "Connect" cluster with required plugins
+#
+# Captured from the live cluster (2026-10-13). This is what makes the JDBC,
+# ActiveMQ and Iceberg connectors available; without these plugins the
+# Connector CRs in 02-connectors-cr.yaml and the 06/07 sink JSONs will not load.
+#
+# Prerequisites (NOT in this repo — install first via Confluent for Kubernetes):
+#   Confluent Operator, KRaftController(3), Kafka(3), SchemaRegistry,
+#   KsqlDB, ControlCenter, KafkaRestProxy in namespace "confluent".
+#   Re-export them from a running cluster with:
+#     oc get kraftcontroller,kafka,schemaregistry,ksqldb,controlcenter,kafkarestproxy \
+#        -n confluent -o yaml
+#
+# Apply with:  oc apply -f confluent-setup/00-connect-cr.yaml -n confluent
+# =============================================================================
+apiVersion: platform.confluent.io/v1beta1
+kind: Connect
+metadata:
+  name: connect
+  namespace: confluent
+spec:
+  replicas: 1
+  image:
+    application: confluentinc/cp-server-connect:8.3.2
+    init: confluentinc/confluent-init-container:3.3.0
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka:9071
+  configOverrides:
+    server:
+      - plugin.path=/mnt/plugins,/usr/share/java,/usr/share/confluent-hub-components
+  build:
+    type: onDemand
+    onDemand:
+      plugins:
+        confluentHub:
+          - name: kafka-connect-jdbc
+            owner: confluentinc
+            version: 10.8.4
+          - name: kafka-connect-activemq
+            owner: confluentinc
+            version: 13.0.11
+          - name: kafka-connect-s3-source
+            owner: confluentinc
+            version: 3.1.9
+          - name: iceberg-kafka-connect
+            owner: iceberg
+            version: 1.9.2

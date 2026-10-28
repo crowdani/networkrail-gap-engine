@@ -1,0 +1,104 @@
+# =============================================================================
+# flink-explorer — Next.js UI for Confluent Flink (CMF) / Kafka REST
+#
+# Deployment spec captured from the live cluster (2026-10-13).
+# The Service and Route were NOT captured (cluster became unreachable) — they
+# are reconstructed from the Deployment (port 3001, probes on /dashboard).
+# Verify against a running cluster if one is still available:
+#   oc get svc,route flink-explorer -n networkrail-gap-engine -o yaml
+#
+# Image is built from exploration_ui/flink-explorer/Dockerfile and pushed to
+# the internal registry as flink-explorer:latest. build-and-deploy-images.sh
+# does NOT currently build it — build manually:
+#   podman build --platform linux/amd64 -t $REGISTRY/networkrail-gap-engine/flink-explorer:latest \
+#     -f exploration_ui/flink-explorer/Dockerfile exploration_ui/flink-explorer/
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-explorer
+  namespace: networkrail-gap-engine
+  labels:
+    app: flink-explorer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-explorer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: flink-explorer
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: flink-explorer
+          image: image-registry.openshift-image-registry.svc:5000/networkrail-gap-engine/flink-explorer:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3001
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3001"
+            - name: KAFKA_REST_URL
+              value: "http://kafkarestproxy.confluent.svc:8082"
+            - name: CMF_URL
+              value: "http://cmf-service.confluent.svc:80"
+            - name: CMF_ENV
+              value: "networkrail-flink"
+          readinessProbe:
+            httpGet: { path: /dashboard, port: 3001 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /dashboard, port: 3001 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-explorer
+  namespace: networkrail-gap-engine
+  labels:
+    app: flink-explorer
+spec:
+  selector:
+    app: flink-explorer
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: flink-explorer
+  namespace: networkrail-gap-engine
+  labels:
+    app: flink-explorer
+spec:
+  # host omitted: OpenShift generates flink-explorer-networkrail-gap-engine.<cluster-apps-domain>
+  to:
+    kind: Service
+    name: flink-explorer
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge

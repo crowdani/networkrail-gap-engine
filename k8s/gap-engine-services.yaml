@@ -1,0 +1,159 @@
+# =============================================================================
+# gap-engine services — journey-builder, journey-analyzer, analytics-scheduler
+#
+# Captured from the live cluster (2026-10-13). These three Deployments all run
+# the SAME image: networkrail-gap-engine/gap-engine:latest
+#
+# !! The source for the gap-engine image is NOT in this repository !!
+# journey_builder.py, journey_analyzer_improved.py and analytics_scheduler.py
+# (and whatever Dockerfile builds them) are missing from git. Before rebuilding
+# on a new cluster, recover them from the running pods, e.g.:
+#
+#   oc rsync journey-builder-<pod>:/app/ ./gap_engine_src/ -n networkrail-gap-engine
+#
+# then add a Dockerfile + build step. See REBUILD-REQUIREMENTS.md.
+#
+# Values below are the LIVE values, which had drifted from the last-applied
+# annotations (e.g. Kafka bootstrap now points at the confluent namespace).
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: journey-builder
+  namespace: networkrail-gap-engine
+  labels:
+    app: journey-builder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: journey-builder
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: journey-builder
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: journey-builder
+          image: image-registry.openshift-image-registry.svc:5000/networkrail-gap-engine/gap-engine:latest
+          imagePullPolicy: Always
+          command: ["python3", "journey_builder.py"]
+          env:
+            - name: POSTGRES_HOST
+              value: "postgresql.networkrail-gap-engine.svc"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: postgresql, key: database-name } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: postgresql, key: database-user } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgresql, key: database-password } }
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-0.kafka.confluent.svc.cluster.local:9092,kafka-1.kafka.confluent.svc.cluster.local:9092,kafka-2.kafka.confluent.svc.cluster.local:9092"
+            - name: PG_STATEMENT_TIMEOUT
+              value: "15000"
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: journey-analyzer
+  namespace: networkrail-gap-engine
+  labels:
+    app: journey-analyzer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: journey-analyzer
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: journey-analyzer
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: journey-analyzer
+          image: image-registry.openshift-image-registry.svc:5000/networkrail-gap-engine/gap-engine:latest
+          imagePullPolicy: Always
+          command: ["python3", "journey_analyzer_improved.py"]
+          env:
+            - name: POSTGRES_HOST
+              value: "postgresql.networkrail-gap-engine.svc"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: postgresql, key: database-name } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: postgresql, key: database-user } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgresql, key: database-password } }
+            - name: ANALYZER_BATCH_SIZE
+              value: "500"
+            - name: ANALYZER_STATEMENT_TIMEOUT
+              value: "30000"
+            - name: ANALYZER_SLEEP_SECONDS
+              value: "300"
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-scheduler
+  namespace: networkrail-gap-engine
+  labels:
+    app: analytics-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics-scheduler
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: analytics-scheduler
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: analytics-scheduler
+          image: image-registry.openshift-image-registry.svc:5000/networkrail-gap-engine/gap-engine:latest
+          imagePullPolicy: Always
+          command: ["python", "analytics_scheduler.py"]
+          env:
+            - name: POSTGRES_HOST
+              value: "postgresql.networkrail-gap-engine.svc"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: postgresql, key: database-name } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: postgresql, key: database-user } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgresql, key: database-password } }
+            - name: WATSONX_API_KEY
+              valueFrom: { secretKeyRef: { name: watsonx-credentials, key: api-key, optional: true } }
+            - name: WATSONX_PROJECT_ID
+              valueFrom: { secretKeyRef: { name: watsonx-credentials, key: project-id, optional: true } }
+            - name: WATSONX_URL
+              valueFrom: { secretKeyRef: { name: watsonx-credentials, key: url, optional: true } }
+            - name: ANALYTICS_SCHEDULE_HOURS
+              value: "1"
+            - name: LOG_TO_FILE
+              value: "false"
+            - name: LOG_LEVEL
+              value: "INFO"
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }

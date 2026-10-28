@@ -1,0 +1,11 @@
+# Timetable Loader Requirements
+# Minimal dependencies for schedule data processing
+
+# Database
+psycopg2-binary==2.9.9
+
+# Environment variables
+python-dotenv==1.0.0
+
+# Progress bars for loading feedback
+tqdm==4.67.1

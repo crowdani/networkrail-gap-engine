@@ -1,0 +1,32 @@
+{
+  "name": "jdbc-active-schedule",
+  "config": {
+    "connector.class": "io.confluent.connect.jdbc.JdbcSourceConnector",
+
+    "connection.url": "jdbc:postgresql://postgresql.networkrail-gap-engine.svc:5432/network_rail",
+    "connection.user": "postgres",
+    "connection.password": "postgres",
+
+    "query": "SELECT id, cif_train_uid, cif_stp_indicator, schedule_start_date, schedule_end_date, schedule_days_runs, atoc_code, train_status, train_category, signalling_id, headcode, service_code, power_type, timing_load, speed, train_class, sleepers, reservations, catering_code, service_branding, array_to_json(tiploc_array)::text AS tiploc_array, array_to_json(stanox_array)::text AS stanox_array, timing_data::text AS timing_data, transaction_type, applicable_timetable, created_at, updated_at FROM active_schedule",
+
+    "mode": "timestamp",
+    "timestamp.column.name": "updated_at",
+    "timestamp.delay.interval.ms": "5000",
+
+    "topic.prefix": "nr.active_schedule",
+
+    "poll.interval.ms": "43200000",
+
+    "numeric.mapping": "best_fit",
+
+    "transforms": "createKey",
+    "transforms.createKey.type": "org.apache.kafka.connect.transforms.ValueToKey",
+    "transforms.createKey.fields": "cif_train_uid,schedule_start_date,cif_stp_indicator",
+
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false"
+  }
+}

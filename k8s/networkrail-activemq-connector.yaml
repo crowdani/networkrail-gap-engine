@@ -1,0 +1,18 @@
+apiVersion: platform.confluent.io/v1beta1
+kind: Connector
+metadata:
+  name: networkrail-activemq-source
+  namespace: confluent
+spec:
+  class: io.confluent.connect.activemq.ActiveMQSourceConnector
+  connectClusterRef:
+    name: connect
+  taskMax: 1
+  configs:
+    activemq.url: "failover:(tcp://datafeeds.networkrail.co.uk:61619)?randomize=false"
+    activemq.username: daniel.j.crow@gmail.com
+    activemq.password: Sm3g@h3ad
+    jms.destination.type: topic
+    jms.destination.name: TRAIN_MVT_ALL_TOC
+    kafka.topic: TRAIN_MESSAGES
+    output.data.format: JSON

@@ -1,0 +1,264 @@
+# =============================================================================
+# confluent-routes.yaml
+#
+# Exposes Confluent Platform HTTP services via OpenShift Routes so they are
+# accessible from localhost (or any external host) without port-forwarding.
+#
+# NOTE: Kafka bootstrap (port 9092) is raw TCP — OpenShift Routes only support
+# HTTP/HTTPS. Use the port-forward script (k8s/confluent-port-forward.sh) to
+# reach Kafka directly from your machine.
+#
+# Routes created:
+#   https://controlcenter.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+#   https://kafkarestproxy.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+#   https://schemaregistry.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+#   https://ksqldb.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+#   https://connect.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+#   https://kafka-rest.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com  (Kafka HTTP API :8090)
+#
+# Apply:
+#   oc apply -f k8s/confluent-routes.yaml
+# =============================================================================
+
+# =============================================================================
+# ClusterIP wrapper services
+# The Confluent operator creates headless (clusterIP: None) services.
+# OpenShift Routes require a real ClusterIP to proxy traffic, so we create
+# thin ClusterIP wrappers that select the same pods.
+# =============================================================================
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: controlcenter-ext
+  namespace: confluent
+  labels:
+    app: controlcenter
+    confluent-route: "true"
+spec:
+  selector:
+    app: controlcenter
+    clusterId: confluent
+    confluent-platform: "true"
+  ports:
+    - name: http
+      port: 9021
+      targetPort: 9021
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafkarestproxy-ext
+  namespace: confluent
+  labels:
+    app: kafkarestproxy
+    confluent-route: "true"
+spec:
+  selector:
+    app: kafkarestproxy
+    clusterId: confluent
+    confluent-platform: "true"
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8082
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: schemaregistry-ext
+  namespace: confluent
+  labels:
+    app: schemaregistry
+    confluent-route: "true"
+spec:
+  selector:
+    app: schemaregistry
+    clusterId: confluent
+    confluent-platform: "true"
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ksqldb-ext
+  namespace: confluent
+  labels:
+    app: ksqldb
+    confluent-route: "true"
+spec:
+  selector:
+    app: ksqldb
+    clusterId: confluent
+    confluent-platform: "true"
+  ports:
+    - name: http
+      port: 8088
+      targetPort: 8088
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: connect-ext
+  namespace: confluent
+  labels:
+    app: connect
+    confluent-route: "true"
+spec:
+  selector:
+    app: connect
+    clusterId: confluent
+    confluent-platform: "true"
+  ports:
+    - name: http
+      port: 8083
+      targetPort: 8083
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-http-ext
+  namespace: confluent
+  labels:
+    app: kafka
+    confluent-route: "true"
+spec:
+  selector:
+    app: kafka
+    clusterId: confluent
+    confluent-platform: "true"
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8090
+
+# =============================================================================
+# OpenShift Routes  (edge TLS termination — HTTPS in, HTTP to pod)
+# =============================================================================
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: controlcenter
+  namespace: confluent
+  labels:
+    confluent-route: "true"
+  annotations:
+    haproxy.router.openshift.io/timeout: 120s
+spec:
+  host: controlcenter.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+  to:
+    kind: Service
+    name: controlcenter-ext
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: kafkarestproxy
+  namespace: confluent
+  labels:
+    confluent-route: "true"
+spec:
+  host: kafkarestproxy.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+  to:
+    kind: Service
+    name: kafkarestproxy-ext
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: schemaregistry
+  namespace: confluent
+  labels:
+    confluent-route: "true"
+spec:
+  host: schemaregistry.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+  to:
+    kind: Service
+    name: schemaregistry-ext
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ksqldb
+  namespace: confluent
+  labels:
+    confluent-route: "true"
+spec:
+  host: ksqldb.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+  to:
+    kind: Service
+    name: ksqldb-ext
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: connect
+  namespace: confluent
+  labels:
+    confluent-route: "true"
+spec:
+  host: connect.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+  to:
+    kind: Service
+    name: connect-ext
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: kafka-rest
+  namespace: confluent
+  labels:
+    confluent-route: "true"
+  annotations:
+    haproxy.router.openshift.io/timeout: 30s
+spec:
+  host: kafka-rest.apps.itz-klvg6u.infra01-lb.lon04.techzone.ibm.com
+  to:
+    kind: Service
+    name: kafka-http-ext
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

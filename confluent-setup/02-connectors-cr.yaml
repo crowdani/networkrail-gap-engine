@@ -1,0 +1,109 @@
+apiVersion: platform.confluent.io/v1beta1
+kind: Connector
+metadata:
+  name: jdbc-tiploc-reference
+  namespace: confluent
+spec:
+  class: io.confluent.connect.jdbc.JdbcSourceConnector
+  connectClusterRef:
+    name: connect
+  taskMax: 1
+  configs:
+    connection.url: "jdbc:postgresql://postgresql.networkrail-gap-engine.svc:5432/network_rail"
+    connection.user: "postgres"
+    connection.password: "postgres"
+    query: "SELECT stanox, tiploc, three_alpha, COALESCE(nlc_desc_16, nlc_desc, tiploc, stanox) AS station_name FROM tiploc_reference WHERE stanox IS NOT NULL AND stanox != '' AND tiploc IS NOT NULL AND tiploc != ''"
+    mode: "bulk"
+    poll.interval.ms: "86400000"
+    topic.prefix: "NR_TIPLOC_REFERENCE"
+    numeric.mapping: "best_fit"
+    transforms: "createKey,extractKey"
+    transforms.createKey.type: "org.apache.kafka.connect.transforms.ValueToKey"
+    transforms.createKey.fields: "stanox"
+    transforms.extractKey.type: "org.apache.kafka.connect.transforms.ExtractField$Key"
+    transforms.extractKey.field: "stanox"
+    key.converter: "org.apache.kafka.connect.storage.StringConverter"
+    key.converter.schemas.enable: "false"
+    value.converter: "org.apache.kafka.connect.json.JsonConverter"
+    value.converter.schemas.enable: "false"
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Connector
+metadata:
+  name: jdbc-active-schedule
+  namespace: confluent
+spec:
+  class: io.confluent.connect.jdbc.JdbcSourceConnector
+  connectClusterRef:
+    name: connect
+  taskMax: 1
+  configs:
+    connection.url: "jdbc:postgresql://postgresql.networkrail-gap-engine.svc:5432/network_rail"
+    connection.user: "postgres"
+    connection.password: "postgres"
+    # Bulk mode: re-emits all today-valid schedules on every poll.
+    # Ordered by STP priority (P→N→O→C) so that LATEST_BY_OFFSET in ksqlDB's
+    # SCHEDULE_TABLE (keyed by SERVICE_CODE) retains the highest-priority variant
+    # for each service code — O (overlay) overwrites N/P, C (cancel) overwrites all.
+    # days_runs substring(pos,1)='1' filters to schedules running today.
+    # ISODOW: Mon=1 … Sun=7, matching CIF days_runs bit positions.
+    query: >-
+      SELECT id, cif_train_uid, cif_stp_indicator, schedule_start_date,
+             schedule_end_date, schedule_days_runs, atoc_code, train_status,
+             train_category, signalling_id, headcode, service_code, power_type,
+             timing_load, speed, train_class, sleepers, reservations, catering_code,
+             service_branding,
+             array_to_json(tiploc_array)::text AS tiploc_array,
+             array_to_json(stanox_array)::text AS stanox_array,
+             timing_data::text AS timing_data,
+             transaction_type, applicable_timetable, created_at, updated_at
+      FROM   active_schedule
+      WHERE  schedule_start_date <= CURRENT_DATE
+        AND  schedule_end_date   >= CURRENT_DATE
+        AND  SUBSTRING(schedule_days_runs,
+                       EXTRACT(ISODOW FROM CURRENT_DATE)::int, 1) = '1'
+      ORDER BY
+        CASE cif_stp_indicator
+          WHEN 'P' THEN 0
+          WHEN 'N' THEN 1
+          WHEN 'O' THEN 2
+          WHEN 'C' THEN 3
+          ELSE 0
+        END ASC
+    mode: "bulk"
+    poll.interval.ms: "3600000"
+    topic.prefix: "NR_ACTIVE_SCHEDULE"
+    numeric.mapping: "best_fit"
+    # Key by service_code so ksqlDB SCHEDULE_TABLE (GROUP BY SERVICE_CODE) can join
+    # against MOVEMENT_STREAM which is partitioned by train_service_code.
+    # NOTE: multiple trains share one service_code; SCHEDULE_TABLE therefore only
+    # retains one CIF_TRAIN_UID per code.  The correct per-train UID is resolved via
+    # TRAIN_ACTIVATION_TABLE (built from type-0001 activation messages) in Step 6.
+    transforms: "createKey,extractKey"
+    transforms.createKey.type: "org.apache.kafka.connect.transforms.ValueToKey"
+    transforms.createKey.fields: "service_code"
+    transforms.extractKey.type: "org.apache.kafka.connect.transforms.ExtractField$Key"
+    transforms.extractKey.field: "service_code"
+    key.converter: "org.apache.kafka.connect.storage.StringConverter"
+    key.converter.schemas.enable: "false"
+    value.converter: "org.apache.kafka.connect.json.JsonConverter"
+    value.converter.schemas.enable: "false"
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Connector
+metadata:
+  name: networkrail-activemq-source
+  namespace: confluent
+spec:
+  class: io.confluent.connect.activemq.ActiveMQSourceConnector
+  connectClusterRef:
+    name: connect
+  taskMax: 1
+  configs:
+    activemq.url: "failover:(tcp://datafeeds.networkrail.co.uk:61619)?randomize=false"
+    activemq.username: "daniel.j.crow@gmail.com"
+    activemq.password: "Sm3g@h3ad"
+    jms.destination.type: "topic"
+    jms.destination.name: "TRAIN_MVT_ALL_TOC"
+    kafka.topic: "NR_TRAIN_MESSAGES"
+    output.data.format: "JSON"

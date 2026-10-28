@@ -1,0 +1,111 @@
+---
+# One-shot Job: backfills stanox_array on active_schedule using tiploc_reference.
+# Run this after corpus-load-job completes when schedules were loaded before CORPUS.
+#
+# Usage:
+#   oc apply -f k8s/backfill-stanox-job.yaml
+#   oc logs -f job/backfill-stanox -n networkrail-gap-engine
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backfill-stanox
+  namespace: networkrail-gap-engine
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: backfill-stanox
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: backfill
+          image: registry.redhat.io/rhel9/postgresql-15:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting stanox_array backfill..."
+              psql -v ON_ERROR_STOP=1 <<'SQL'
+
+              -- Process in batches of 10,000 to avoid long-running single transactions.
+              DO $$
+              DECLARE
+                batch_size  INT := 10000;
+                offset_val  INT := 0;
+                rows_done   INT := 0;
+                batch_rows  INT;
+              BEGIN
+                LOOP
+                  UPDATE active_schedule s
+                  SET stanox_array = (
+                    SELECT array_agg(tr.stanox ORDER BY ord)
+                    FROM unnest(s.tiploc_array) WITH ORDINALITY AS t(tiploc, ord)
+                    LEFT JOIN tiploc_reference tr ON tr.tiploc = t.tiploc
+                  ),
+                  updated_at = CURRENT_TIMESTAMP
+                  WHERE s.id IN (
+                    SELECT id FROM active_schedule
+                    WHERE NOT EXISTS (
+                      SELECT 1 FROM unnest(stanox_array) x WHERE x IS NOT NULL
+                    )
+                    ORDER BY id
+                    LIMIT batch_size
+                  );
+
+                  GET DIAGNOSTICS batch_rows = ROW_COUNT;
+                  rows_done := rows_done + batch_rows;
+
+                  RAISE NOTICE 'Backfilled % rows (total so far: %)', batch_rows, rows_done;
+
+                  EXIT WHEN batch_rows = 0;
+                END LOOP;
+
+                RAISE NOTICE 'Backfill complete. Total rows updated: %', rows_done;
+              END $$;
+
+              -- Verify
+              SELECT
+                COUNT(*)                                                          AS total_schedules,
+                COUNT(*) FILTER (WHERE EXISTS (
+                  SELECT 1 FROM unnest(stanox_array) x WHERE x IS NOT NULL
+                ))                                                                AS with_stanox,
+                COUNT(*) FILTER (WHERE NOT EXISTS (
+                  SELECT 1 FROM unnest(stanox_array) x WHERE x IS NOT NULL
+                ))                                                                AS still_empty
+              FROM active_schedule;
+
+              SQL
+              echo "Done."
+          env:
+            - name: PGHOST
+              value: "postgresql.networkrail-gap-engine.svc"
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-user
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-password
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: database-name
+            # Give the psql session a long statement timeout — each batch should
+            # finish in well under 60s but the outer DO block loops many times.
+            - name: PGOPTIONS
+              value: "-c statement_timeout=0"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

@@ -1,0 +1,14 @@
+# STOMP Client Requirements
+# Minimal dependencies for Network Rail feed consumer
+
+# STOMP protocol client
+stomp.py==8.2.0
+
+# Kafka producer
+kafka-python==2.0.2
+
+# Environment variables
+python-dotenv==1.0.0
+
+# WebSocket support
+websocket-client==1.9.0
